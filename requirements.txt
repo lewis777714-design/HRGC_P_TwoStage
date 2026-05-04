@@ -1,0 +1,34 @@
+# Submission code — runtime dependencies
+# ---------------------------------------------------------------
+# Tested with Python 3.11 on Windows + CUDA 12.4.
+# Versions below are minimum versions known to work.
+#
+# Install with:
+#     pip install -r requirements.txt
+#
+# For a CUDA build of PyTorch, install torch first from the
+# official PyTorch index, then run pip install -r requirements.txt
+# (the torch line below will then be a no-op):
+#     pip install torch>=2.0 --index-url https://download.pytorch.org/whl/cu124
+# ---------------------------------------------------------------
+
+# ── Core (required by train.py / infer.py / ablation.py /
+#         threshold_search.py / data.py / model.py / baselines.py) ──
+torch>=2.0
+transformers>=4.30
+numpy>=1.24
+pandas>=1.5
+
+# ── Baselines B1 / B2 (TF-IDF + LogReg / LinearSVC) ──
+scikit-learn>=1.0
+
+# ── Baselines B7 / B8 (RoBERTa / DeBERTa-v3 tokenizers) ──
+# DeBERTa-v3 ships a SentencePiece tokenizer; protobuf is required
+# by transformers when converting the slow SentencePiece tokenizer.
+sentencepiece>=0.1.99
+protobuf>=3.20
+
+# ── Baseline B10 (LLM zero-shot, baseline_llm.py) — OPTIONAL ──
+# Install whichever provider(s) you plan to run.  Both can coexist.
+google-genai>=0.3   # --provider gemini  (default; needs GEMINI_API_KEY or GOOGLE_API_KEY)
+openai>=1.0         # --provider openai  (needs OPENAI_API_KEY)
