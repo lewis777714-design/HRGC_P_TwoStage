@@ -1,0 +1,10 @@
+numpy==2.2.6
+pandas==2.3.3
+torch==2.6.0
+transformers==4.30.0
+scikit-learn==1.7.2
+matplotlib==3.10.8
+seaborn==0.12.2
+openai==2.34.0
+google-genai==1.75.0
+mlcroissant==1.1.0
