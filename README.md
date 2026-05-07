@@ -1,215 +1,254 @@
-# Submission code — HRGC-P model
+# HRGC-P: Highway-Railroad Grade Crossing Pedestrian Dataset & TwoStage-SLA Baseline
 
-Self-contained implementation of the **HRGC-P model** and all reported
-baselines / ablations. Every entry-point script depends only on `data.py`
-and `model.py` inside this folder; nothing is imported from outside
-`submission_code/`.
+Code for the paper **"A Fine-grained Multi-label Dataset for Pedestrian Risk Factor Prediction at Highway-Railroad Grade Crossings"** (NeurIPS 2026 submission).
 
-## Data
+- **Dataset**: https://doi.org/10.34740/kaggle/dsv/16094059
+- **Anonymous code**: https://anonymous.4open.science/r/HRGC_P_TwoStage-48F1/
 
-Two CSV files are bundled in this folder:
+---
 
-| file | role |
-|------|------|
-| `HRGC_P_ori.csv` | Original Highway-Rail Grade Crossing (Pedestrian) records |
-| `HRGC_P_aug.csv` | Augmented version used for training (original + synthetic samples) |
-
-The training / ablation / baseline scripts default to `HRGC_P_aug.csv`;
-`baseline_llm.py` joins the LLM zero-shot test split back to
-`HRGC_P_ori.csv` to recover the `NARR_SUMMARY` one-line summaries.
-
-> **Training-set download.** The full augmented training file is too
-> large to ship inside `submission_code/`. Download the training CSV
-> from the code link in the paper and place it in **this same folder**
-> (alongside `train.py`) before running any training script. The
-> filename must match the `--data` argument (default `HRGC_P_aug.csv`).
-
-## Files
-
-| file | role |
-|------|------|
-| `data.py` | label parsing, `AccidentDataset`, iterative-stratification split, balanced sampler |
-| `model.py` | `TwoStageModelV7` + helper modules (`ScalarMix`, `AttentionPooling`, `MultiPoolStage1`, `SemanticLabelAttention`, `FlatStage2Head`), `PerClassAsymmetricLoss`, `compute_pos_class_weights`, layer-wise LR groups |
-| `train.py` | V7 training entry point (joint end-to-end, cosine-decayed aux Stage-1 weight, flat-head fusion) |
-| `infer.py` | V7 inference at **default scalar thresholds** (S1=0.5, S2=0.5). No per-label tuning |
-| `threshold_search.py` | per-label threshold sweep on the validation split |
-| `ablation.py` | trains one model per V7 ablation (A1–A8) on the same data splits |
-| `baselines.py` | nine honest baselines: B1 TF-IDF+LR · B2 TF-IDF+SVM · B3 BERT-CLS-flat · B4 BERT-MeanPool-flat · B5 Two-stage-mean · B6 DistilBERT-flat · B7 RoBERTa-flat · B8 DeBERTa-v3-flat · B9 Sentence-BERT zero-shot |
-| `baseline_llm.py` | B10 LLM zero-shot (Google Gemini / OpenAI GPT) on **NARR_SUMMARY** one-line summaries |
-
-## Requirements
+## Environment Setup
 
 ```bash
 pip install -r requirements.txt
 ```
 
-| package | min version | used by |
-|---------|-------------|---------|
-| torch | 2.0 | every script |
-| transformers | 4.30 | every script except baselines B1/B2 and B10 |
-| numpy | 1.24 | every script |
-| pandas | 1.5 | every script |
-| scikit-learn | 1.0 | `baselines.py` (B1 LogReg, B2 LinearSVC) only |
-| sentencepiece | 0.1.99 | `baselines.py` B7/B8 (RoBERTa / DeBERTa-v3 tokenizers) |
-| protobuf | 3.20 | required by transformers when loading the SentencePiece tokenizer for DeBERTa-v3 |
-| google-genai | 0.3 | `baseline_llm.py` B10 (`--provider gemini`, default) |
-| openai | 1.0 | `baseline_llm.py` B10 (`--provider openai`) |
+> **GPU note**: `torch==2.6.0` in `requirements.txt` is the CPU wheel. For CUDA 12.4 (used in the paper on NVIDIA RTX A5000):
+> 
+> ```bash
+> pip install torch==2.6.0+cu124 --index-url https://download.pytorch.org/whl/cu124
+> ```
 
-The last two rows are *optional* — install whichever provider you plan
-to run for B10 (or both, to compare). Core training (V7 + B1-B9) only
-needs the rows above them.
+---
 
-Tested with Python 3.11 on CUDA 12.4. A CUDA GPU with ≥ 16 GB is recommended
-for `train.py` and the BERT baselines (B3 / B4 / B5). `gradient_checkpointing`
-is on by default so that batch-size 96 at sequence length 512 fits comfortably.
+## Data Files
 
-## CSV column requirements
+Place both files in the root of `/` before running any script. Download from the Kaggle link above.
 
-Both `HRGC_P_aug.csv` and `HRGC_P_ori.csv` must contain the columns:
+| File             | Records | Description                                                 |
+| ---------------- | ------- | ----------------------------------------------------------- |
+| `HRGC_P_aug.csv` | 6,056   | Augmented benchmark dataset -- used for training all models |
+| `HRGC_P_ori.csv` | 3,315   | Original manually-labeled dataset -- used for LLM baselines |
 
-- `DETAILED_DESCRIPTION` — input text
-- `WARNING_DEVICE_ISSUES`, `ENVIRONMENTAL_FACTORS`, `HUMAN_FACTORS` —
-  comma-separated subcategory names; the literal `Unidentified` is
-  treated as no label
+---
 
-`HRGC_P_ori.csv` additionally needs a `NARR_SUMMARY` column for the B10
-LLM baseline (one-line summaries that get joined back to the test split).
+## File Structure
 
-The label index space is built from the order of first appearance in the
-CSV (`parse_hierarchical_labels`). When loading saved splits later,
-`parse_labels_with_mapping` reuses the saved `subcategory_mappings.json`
-so the index space matches across runs.
-
-## Quick-start
-
-> Make sure `HRGC_P_aug.csv` (training) and `HRGC_P_ori.csv` (B10 LLM
-> baseline) are present in this folder. If they aren't, download them
-> from the code link in the paper first.
-
-```bash
-# 1. Train HRGC-P
-python train.py --data HRGC_P_aug.csv --seed 42
-
-# 2. Evaluate on the test split (default scalar thresholds)
-python infer.py --experiment-dir training_results_v7/experiment_XXXXXX
-
-# 3. (Optional) Per-label threshold search on validation
-python threshold_search.py --experiment-dir training_results_v7/experiment_XXXXXX
-
-# 4. Reproduce the ablation table (A1 … A8)
-python ablation.py --data HRGC_P_aug.csv --seed 42
-
-# 5. Reproduce the baselines table (B1 … B9)
-python baselines.py --data HRGC_P_aug.csv --seed 42
-
-# 6. (Optional) LLM zero-shot baseline B10 — uses NARR_SUMMARY one-liners
-#    Costs API credits.  Smoke-test with --limit 20 first.
-
-#    Default: Google Gemini
-#      PowerShell:  $env:GEMINI_API_KEY = "..."
-#      bash / zsh:  export GEMINI_API_KEY=...
-python baseline_llm.py \
-    --experiment-dir training_results_v7/experiment_XXXXXX_seed42 \
-    --narr-summary-csv HRGC_P_ori.csv \
-    --limit 20
-
-#    OpenAI for comparison
-#      PowerShell:  $env:OPENAI_API_KEY = "..."
-#      bash / zsh:  export OPENAI_API_KEY=...
-python baseline_llm.py --provider openai --model gpt-4o-mini \
-    --experiment-dir training_results_v7/experiment_XXXXXX_seed42 \
-    --narr-summary-csv HRGC_P_ori.csv \
-    --limit 20
+```
+submission_code/
+├── model.py                  # TwoStage-SLA model architecture (Section 4.1, Figure 3)
+├── data.py                   # Data loading, label parsing, dataset classes (Section 3)
+├── train.py                  # Training entry point for TwoStage-SLA (Section A.2.2)
+├── infer.py                  # Test-set inference -- produces Table 1 TwoStage-SLA results
+├── baselines.py              # Baselines B1-B9 -- produces Table 1 baseline results
+├── baseline_llm_fullrow.py   # LLM zero-shot baselines -- produces Table 2 results
+└── requirements.txt
 ```
 
-## Baseline catalogue
+---
 
-| ID | Backbone / method | Input | Trained? |
-|----|---|---|---|
-| B1 | TF-IDF + LogReg (one-vs-rest) | DETAILED_DESCRIPTION | yes (sklearn) |
-| B2 | TF-IDF + LinearSVC (one-vs-rest) | DETAILED_DESCRIPTION | yes (sklearn) |
-| B3 | BERT-base-uncased + CLS pool + flat head | DETAILED_DESCRIPTION | yes (V7-equivalent budget) |
-| B4 | BERT-base-uncased + MeanPool + flat head | DETAILED_DESCRIPTION | yes |
-| B5 | Two-stage BERT (mean-pool, no label attention) | DETAILED_DESCRIPTION | yes |
-| B6 | DistilBERT-base-uncased + CLS + flat | DETAILED_DESCRIPTION | yes (no LLRD; see note) |
-| B7 | RoBERTa-base + CLS + flat | DETAILED_DESCRIPTION | yes (no LLRD) |
-| B8 | DeBERTa-v3-base + CLS + flat | DETAILED_DESCRIPTION | yes (no LLRD) |
-| B9 | SBERT (mpnet-base-v2) cosine to label-name | DETAILED_DESCRIPTION | **zero-shot**, only 3 thresholds tuned on val |
-| B10 | Google Gemini *or* OpenAI GPT (JSON mode, system instruction) | **NARR_SUMMARY one-liner** | zero-shot, no training data |
+## Running the Code
 
-B6/B7/B8 use simple two-group parameter splits (no LLRD) so that
-DistilBERT, RoBERTa and DeBERTa-v3 train under exactly the same
-optimiser strategy — only the encoder differs. B3/B4 keep V7's LLRD
-because they share its BERT-base backbone.
+### Step 1 -- Train TwoStage-SLA
 
-B10 supports two providers selected with `--provider`:
+`train.py` trains the full TwoStage-SLA model (Section 4.1) and produces the checkpoint used by `infer.py`.
 
-- `--provider gemini` (default) → `gemini-2.5-flash`. Reads `GEMINI_API_KEY`
-  (falls back to `GOOGLE_API_KEY`). Cost ≈ \$0.001/row → ~\$0.50 / 500 rows.
-- `--provider openai` → `gpt-4o-mini`. Reads `OPENAI_API_KEY`. Cost
-  ≈ \$0.0007/row → ~\$0.30 / 500 rows.
+Open `train.py` and set the USER CONFIG block at the top:
 
-Both providers are asked for strict JSON (Gemini via
-`response_mime_type="application/json"`, OpenAI via `response_format=
-{"type": "json_object"}`), and the long subcategory list is sent as
-the system instruction / system message so the provider's KV cache
-amortises it across rows. Pass `--model` to override the default
-model name (e.g. `gemini-2.5-pro`, `gpt-4o`).
+```python
+DATA_FILE  = r"HRGC_P_aug.csv"      # path to augmented dataset
+SAVE_DIR   = r"training_results_v7"  # output directory
+SEED       = 123                     # paper reports seeds {42, 123, 456, 789, 2024}
+EPOCHS     = 500
+PATIENCE   = 50
+BATCH_SIZE = 128
+```
 
-For shorter ablation / baseline experiments, pass `--epochs 60 --patience 20`.
-All scripts share the V7 hyper-parameters defined in `train.CONFIG`.
+Then run:
 
-## Reproducibility
+```bash
+python train.py
+```
 
-Every entry-point script accepts `--seed <int>` (default 42).  The seed
-controls Python's `random`, `numpy`, `torch`, and `torch.cuda` RNGs via
-`train.set_seed`.  All scripts persist the seed to disk:
+You can also override settings from the command line without editing the file:
 
-- `train.py` writes `experiment_<timestamp>_seed<seed>/training_config.json`
-- `ablation.py` writes `run_<timestamp>_seed<seed>/run_config.json`
-- `baselines.py` writes `run_<timestamp>_seed<seed>/run_config.json`
-- `infer.py` and `threshold_search.py` re-seed at startup for parity
-  (their forward pass is deterministic regardless)
+```bash
+python train.py --data HRGC_P_aug.csv --seed 42 --epochs 500
+```
 
-Both `ablation.py` and `baselines.py` re-seed **before each ablation /
-baseline** so the comparisons are mutually reproducible — running A1
-through A8 in sequence gives the same numbers as running just A5 alone.
+Each run writes a timestamped experiment folder under `training_results_v7/`:
 
-For bit-exact GPU reproducibility, pass `train.py --strict-determinism`.
-That forces cuDNN to its deterministic kernels and disables autotuning,
-costing ~10-15% throughput.  Off by default to match V6.
+```
+training_results_v7/
+└── experiment_20260504_102818_seed123/
+    ├── best_model_v7.pth          <- best checkpoint (by validation µF1)
+    ├── subcategory_mappings.json  <- label-to-index maps
+    ├── training_log.json          <- per-epoch train/val metrics
+    └── data_splits/
+        ├── train.csv
+        ├── val.csv
+        └── test.csv               <- held-out test split used by infer.py
+```
 
-## V7 design (one-paragraph summary)
+To reproduce the mean +/- std in Table 1, run with each of the five seeds `{42, 123, 456, 789, 2024}` and average the results.
 
-`TwoStageModelV7` is a hierarchical multi-label classifier built on a
-trainable BERT backbone. A learned ScalarMix combines the 13 BERT layer
-states; a `MultiPoolStage1` pool ([CLS ; MeanPool ; AttentionPool] →
-projection) feeds the 3-way Stage-1 main-factor head. For each Stage-2
-category (warning / environmental / human), the model produces two
-parallel logit streams: a `SemanticLabelAttention` head whose label
-queries are initialised from BERT-encoded subcategory names and
-conditioned on Stage-1 logits, and a small `FlatStage2Head` MLP from the
-mean-pooled document representation. The two streams are blended with a
-per-category learnable scalar `α ∈ (0, 1)`:
+---
 
-    final_logits = σ(α) · attn_logits + (1 − σ(α)) · flat_logits
+### Step 2 -- Evaluate TwoStage-SLA on the Test Set (Table 1)
 
-The training objective is the V7 loss
+`infer.py` loads the checkpoint produced by `train.py` and evaluates it on the held-out `test.csv`. This produces the **TwoStage-SLA** row in Table 1 (overall µF1 = 0.960 +/- 0.002).
 
-    L = L_S2_mixed + flat_aux_w · L_S2_flat + aux_w(t) · L_S1
+Open `infer.py` and set the USER CONFIG block at the top:
 
-where every term is `PerClassAsymmetricLoss` with per-class positive
-reweighting capped at `w_max = 8`, and `aux_w(t)` cosine-decays from
-`0.5` to `0.05` over the first 30 epochs (then stays flat).
-EMA is **off** by default (the V6→V7 ablation showed it hurts).
+```python
+EXPERIMENT_DIR   = r"training_results_v7\experiment_20260504_102818_seed123"
+STAGE1_THRESHOLD = 0.5
+STAGE2_THRESHOLD = 0.95
+BATCH_SIZE       = 12
+BERT_MODEL       = "bert-base-uncased"
+```
 
-## Notes on the baselines
+Then run:
 
-`baselines.py` trains the BERT baselines (B3/B4/B5) under the **same**
-budget, optimiser, LLRD, batch size, and loss schedule as V7 — they get
-the same `PerClassAsymmetricLoss`, the same balanced sampler, the same
-LR warmup, and `gradient_checkpointing`. Only the architecture differs.
-This makes the V7-vs-baseline comparison apples-to-apples.
+```bash
+python infer.py
+```
 
-If a baseline beats V7 on some metric, that's a real result; the script
-does not adjust hyper-parameters to suppress baseline performance.
+The script prints Warning / Environmental / Human group µF1 scores and the overall µF1, and writes a detailed results JSON to `inference_results_v7/<experiment_name>/`.
+
+---
+
+### Step 3 -- Baselines B1-B9 (Table 1)
+
+`baselines.py` trains and evaluates all classical and neural baselines on the **same data splits** produced during `train.py`, so the comparison is directly apples-to-apples with TwoStage-SLA.
+
+| ID  | Method                             | Overall µF1 (paper) |
+| --- | ---------------------------------- | ------------------- |
+| B1  | TF-IDF + Logistic Regression       | 0.840 +/- 0.001     |
+| B2  | TF-IDF + Linear SVM                | 0.918 +/- 0.004     |
+| B3  | BERT-base CLS (flat)               | 0.936 +/- 0.001     |
+| B4  | BERT-base MeanPool (flat)          | 0.931 +/- 0.002     |
+| B5  | Two-stage BERT, no label attention | 0.933 +/- 0.007     |
+| B6  | DistilBERT-base CLS (flat)         | 0.945 +/- 0.008     |
+| B7  | RoBERTa-base CLS (flat)            | 0.936 +/- 0.012     |
+| B9  | SBERT cosine zero-shot             | 0.127 +/- 0.000     |
+
+Open `baselines.py` and set the USER CONFIG block at the top:
+
+```python
+DATA_FILE  = r"HRGC_P_aug.csv"
+SAVE_DIR   = r"baselines_results_v7"
+SEED       = 42
+EPOCHS     = 500
+PATIENCE   = 50
+BATCH_SIZE = 128
+ONLY       = None    # None = run all baselines
+```
+
+Then run:
+
+```bash
+# Run all baselines (B1 through B9)
+python baselines.py
+
+# Run only B1 and B2 (no GPU required)
+python baselines.py --only B1,B2
+
+# Run a single baseline
+python baselines.py --only B3
+
+# Quick sanity check with shorter training
+python baselines.py --epochs 60 --patience 20
+```
+
+Results are saved to `baselines_results_v7/`.
+
+---
+
+### Step 4 -- LLM Zero-Shot Baselines (Table 2)
+
+`baseline_llm_fullrow.py` decodes the full FRA structured form (all coded fields converted to natural language) plus the narrative summary into a single prompt, then calls the LLM to predict subcategory labels with no fine-tuning. This produces the **Table 2** results:
+
+| Model            | Warning µF1 | Environmental µF1 | Human µF1 | Overall µF1 |
+| ---------------- | ----------- | ----------------- | --------- | ----------- |
+| GPT-4o-mini      | 0.201       | 0.706             | 0.561     | 0.518       |
+| Gemini 2.5 Flash | 0.107       | 0.935             | 0.447     | 0.575       |
+
+**Set your API key before running** (Windows PowerShell):
+
+```bash
+$env:GEMINI_API_KEY = "your_key_here"   # for Gemini
+$env:OPENAI_API_KEY = "your_key_here"   # for OpenAI
+```
+
+Open `baseline_llm_fullrow.py` and set the USER CONFIG block at the top:
+
+```python
+EXPERIMENT_DIR = r"training_results_v7\experiment_20260504_102818_seed123"
+DATA_CSV       = r"HRGC_P_ori.csv"   # original data -- real incidents only, no synthetic
+OUT_DIR        = r"baseline_llm_fullrow_results"
+PROVIDER       = "gemini"             # "gemini", "openai", or "both"
+MODEL          = None                 # None -> provider default (gemini-2.5-flash / gpt-4o-mini)
+LIMIT          = None                 # None -> full test split; set e.g. 20 for a smoke test
+RESUME         = False
+```
+
+Then run:
+
+```bash
+# Gemini 2.5 Flash (default)
+python baseline_llm_fullrow.py --provider gemini
+
+# GPT-4o-mini
+python baseline_llm_fullrow.py --provider openai --model gpt-4o-mini
+
+# Both providers in one pass
+python baseline_llm_fullrow.py --provider both
+
+# Smoke test on first 20 rows before paying for the full run
+python baseline_llm_fullrow.py --provider gemini --limit 20
+
+# Resume an interrupted run (skips already-saved rows)
+python baseline_llm_fullrow.py --provider gemini --resume
+```
+
+Results (per-row predictions + F1 scores) are saved to `baseline_llm_fullrow_results/`.
+
+---
+
+## Model Architecture (Section 4.1, Figure 3)
+
+`model.py` is self-contained and implements all components of TwoStage-SLA:
+
+| Component                                                            | Class                    | Paper section |
+| -------------------------------------------------------------------- | ------------------------ | ------------- |
+| Learned weighted sum of all 13 BERT layers                           | `ScalarMix`              | Section 4.1.1 |
+| Multi-granularity pooling [CLS ; MeanPool ; AttnPool]                | `MultiPool`              | Section 4.1.2 |
+| Stage-1 primary-factor MLP (3 binary outputs: Warning / Env / Human) | inside `TwoStageModelV7` | Section 4.1.2 |
+| Semantic Label Attention with BERT-CLS initialized queries           | `SemanticLabelAttention` | Section 4.1.3 |
+| Flat MLP auxiliary head + learned fusion gate sigmoid(alpha)         | `FlatStage2Head`         | Section 4.1.3 |
+| Asymmetric Loss with per-class positive reweighting                  | `PerClassAsymmetricLoss` | Section A.2.1 |
+
+---
+
+## Key Hyperparameters (Section A.2.2)
+
+| Parameter                         | Value                                          |
+| --------------------------------- | ---------------------------------------------- |
+| Backbone                          | `bert-base-uncased` (~110M parameters)         |
+| BERT encoder LR                   | 2e-5                                           |
+| Task-specific head LR             | 5e-4                                           |
+| Layer-wise LR decay factor        | 0.85                                           |
+| Batch size / grad accum steps     | 96 / 4 (effective batch 384)                   |
+| LR warmup                         | 10% of total steps, then cosine decay to 0     |
+| Gradient clip norm                | 1.0                                            |
+| Weight decay                      | 0.01                                           |
+| Dropout                           | 0.3                                            |
+| Max epochs / early-stop patience  | 500 / 50                                       |
+| ASL gamma+ / gamma- / margin m    | 1 / 3 / 0.05                                   |
+| Positive reweight power / ceiling | 0.5 / 8.0                                      |
+| Stage-1 aux loss lambda_aux       | cosine anneal 0.5 -> 0.05 over first 30 epochs |
+| Flat-head aux weight lambda_flat  | 0.2 (fixed)                                    |
+| Data split                        | 70 / 15 / 15 stratified by subcategory         |
+| Evaluation seeds                  | {42, 123, 456, 789, 2024}                      |
+| Hardware                          | NVIDIA RTX A5000, 24 GB VRAM                   |
